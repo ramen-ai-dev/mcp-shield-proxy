@@ -237,6 +237,9 @@ Options:
   --bundle-ids <ids>  Comma-separated bundle slugs
   --policy-ids <ids>  Comma-separated policy UUIDs (alternative to --bundle-ids)
   --log-level <level> silent | info | debug  (default: info)
+  --forge-url <url>   ramen forge base URL for query_domain_memory
+                      (default: https://forge.ramenai.dev; https only, http for localhost)
+  --domain <slug>     Default memory and provenance domain (default: general)
   --help              Show this message
 ```
 
@@ -322,12 +325,78 @@ rather than a silent failure.
 
 ---
 
+## Domain memory: `query_domain_memory`
+
+The proxy adds its own read-only tool to the downstream server's `tools/list`
+response, so MCP clients such as Claude Desktop and Cursor can look up
+codified lessons on [ramen forge](https://forge.ramenai.dev) before calling a
+tool:
+
+```json
+{
+  "name": "query_domain_memory",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "domain": { "type": "string", "description": "e.g. fintech, industrial_iot, devsecops" },
+      "tool_name": { "type": "string", "description": "Name of the tool about to be invoked" },
+      "query": { "type": "string", "description": "Optional keyword search string" }
+    },
+    "required": ["tool_name"]
+  }
+}
+```
+
+- The proxy answers this tool itself and never forwards it to the downstream
+  server. It is a read of public, advisory data with no side effects, so it is
+  not sent to the ramen-ai firewall. Every other `tools/call` still is.
+- Results come back as text for the model and as `structuredContent` (up to 5
+  lessons: violation, statutory anchor, steering directive, failed and repaired
+  arguments, receipt id, and whether the forge holds a signature).
+- `domain` defaults to `--domain`. Reads fail open: if ramen forge is
+  unreachable the tool returns an empty result instead of an error.
+- Recalled lessons are untrusted guidance. Anyone with a forge write token can
+  contribute one, and the proxy never writes to ramen forge.
+- If the downstream server already exposes a tool named `query_domain_memory`,
+  the proxy does not add or shadow it; calls go to the server through the
+  governed path.
+
+## Provenance metadata
+
+Each governed `tools/call` result carries a provenance envelope under
+`result._meta["ramenai.dev/provenance"]`, both for allowed calls (merged into
+the downstream server's result, keeping its own `_meta`) and for blocked
+responses. `query_domain_memory` results carry one describing the top lesson.
+
+```json
+{
+  "source": "ramen-local",
+  "version": "1.0",
+  "domain": "fintech",
+  "tool_name": "read_file",
+  "exemplar_id": null,
+  "statutory_anchor": null,
+  "receipt_id": "c29be406-7de5-4bd1-85d2-eea74a321a38",
+  "prevention_summary": null,
+  "audit_uri": null
+}
+```
+
+The shape is `RamenProvenanceEnvelope` from `@ramen-ai/node-core`, the same
+envelope ramen-foundry emits as `_ramen_provenance`. MCP requires `_meta` keys
+to begin with a letter or digit, so the proxy namespaces it as
+`ramenai.dev/provenance`. `source` is `ramen-forge` only when the envelope
+points at a ramen forge lesson; lesson fields are `null` otherwise.
+
+---
+
 ## Available bundles
 
 | Bundle slug | Coverage |
 |---|---|
 | `ramen__shield_core_it` | Destructive execution, prompt injection, secret exfiltration, OWASP ASI-06 indirect injection |
 | `ramen__eu_ai_act_baseline` | EU AI Act Articles 5, 10, and 50 — prohibited practices, data governance, transparency |
+| `ramen__industrial_iot_actuation_invariance` | Industrial actuation invariants, including Robotics Physical Safety & Biomechanical Invariance (`1fc71052-eb7e-43fe-9bfa-7ee06afe5b95`) |
 
 Full bundle reference and pricing: [https://ramenai.dev/pricing](https://ramenai.dev/pricing)
 
@@ -338,7 +407,8 @@ Full bundle reference and pricing: [https://ramenai.dev/pricing](https://ramenai
 - **Secrets in config files:** `claude_desktop_config.json` is stored on disk.
   On shared machines, prefer setting `RAMEN_API_KEY` and provider keys as
   system-level environment variables rather than hardcoding them in the config.
-- **Pass-through traffic:** only `tools/call` messages are evaluated. All other
+- **Pass-through traffic:** only `tools/call` messages are evaluated, except
+  the proxy's own read-only `query_domain_memory`. All other
   MCP message types (resource reads, prompt fetches, notifications) pass through
   without evaluation. If you need to evaluate those, use the ramen-ai SDK
   directly in your server implementation.

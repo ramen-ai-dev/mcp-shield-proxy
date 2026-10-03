@@ -15,6 +15,8 @@ export interface FirewallVerdict {
   steering: string | null;
   statutoryAnchors: string[];
   receiptVerified: boolean;
+  /** Schema V5 receipt id of the evaluation, when one was returned */
+  receiptId: string | null;
   /** Present when the call was blocked due to an evaluation error */
   error?: string;
 }
@@ -53,6 +55,7 @@ export async function evaluate(
         `Tool '${params.name}' has been blocked. Error: ${message}`,
       statutoryAnchors: [],
       receiptVerified: false,
+      receiptId: null,
       error: message,
     };
   }
@@ -62,6 +65,7 @@ export async function evaluate(
     steering: verdict.steering,
     statutoryAnchors: verdict.statutoryAnchors,
     receiptVerified: verdict.receiptVerified,
+    receiptId: verdict.receipt?.id ?? null,
   };
 }
 

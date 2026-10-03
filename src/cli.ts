@@ -15,9 +15,14 @@
  *   ANTHROPIC_API_KEY  (optional) BYOK alternative provider key
  *   RAMEN_PROVIDER     (optional) provider name: openai | anthropic | google
  *   RAMEN_BASE_URL     (optional) override API base URL
+ *   FORGE_WRITE_TOKEN  (unused) the proxy only reads from ramen forge
  */
 
 import type { ProxyConfig } from "./types.js";
+
+export const DEFAULT_FORGE_URL = "https://forge.ramenai.dev";
+export const DEFAULT_DOMAIN = "general";
+const DOMAIN_RE = /^[a-z0-9][a-z0-9_-]{1,63}$/;
 
 function printUsageAndExit(message?: string): never {
   if (message) process.stderr.write(`Error: ${message}\n\n`);
@@ -29,6 +34,9 @@ Options:
   --bundle-ids <ids>      Comma-separated bundle slugs (e.g. ramen__shield_core_it)
   --policy-ids <ids>      Comma-separated policy UUIDs (alternative to --bundle-ids)
   --log-level <level>     silent | info | debug  (default: info)
+  --forge-url <url>       ramen forge base URL for query_domain_memory
+                          (default: https://forge.ramenai.dev)
+  --domain <slug>         Default memory and provenance domain (default: general)
   --help                  Show this message
 
 Environment variables (required):
@@ -66,6 +74,8 @@ export function parseArgs(argv: string[], env: Record<string, string | undefined
   const bundleIds: string[] = [];
   const policyIds: string[] = [];
   let logLevel: ProxyConfig["logLevel"] = "info";
+  let forgeUrl = DEFAULT_FORGE_URL;
+  let domain = DEFAULT_DOMAIN;
 
   // Support both --target "cmd arg1 arg2" and -- cmd arg1 arg2
   const doubleDashIdx = args.indexOf("--");
@@ -113,6 +123,31 @@ export function parseArgs(argv: string[], env: Record<string, string | undefined
         i++;
         break;
       }
+      case "--forge-url": {
+        if (!next) printUsageAndExit("--forge-url requires a value");
+        let url: URL;
+        try {
+          url = new URL(next);
+        } catch {
+          printUsageAndExit(`--forge-url is not a valid URL: ${next}`);
+        }
+        const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+        if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) {
+          printUsageAndExit("--forge-url must use https (http is allowed only for localhost)");
+        }
+        forgeUrl = next.replace(/\/+$/, "");
+        i++;
+        break;
+      }
+      case "--domain": {
+        if (!next) printUsageAndExit("--domain requires a value");
+        if (!DOMAIN_RE.test(next)) {
+          printUsageAndExit("--domain must be a lowercase slug (a-z, 0-9, '_' or '-', 2-64 characters)");
+        }
+        domain = next;
+        i++;
+        break;
+      }
       default:
         printUsageAndExit(`Unknown flag: ${flag}`);
     }
@@ -143,5 +178,7 @@ export function parseArgs(argv: string[], env: Record<string, string | undefined
     targetCommand,
     targetArgs,
     logLevel,
+    forgeUrl,
+    domain,
   };
 }

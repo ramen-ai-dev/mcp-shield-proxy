@@ -64,6 +64,8 @@ export interface McpTextContent {
 export interface ToolsCallResult {
   content: McpTextContent[];
   isError?: boolean;
+  structuredContent?: Record<string, unknown>;
+  _meta?: Record<string, unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -89,4 +91,8 @@ export interface ProxyConfig {
   targetArgs: string[];
   /** Log level: silent | info | debug */
   logLevel: "silent" | "info" | "debug";
+  /** ramen forge base URL for query_domain_memory (default https://forge.ramenai.dev) */
+  forgeUrl?: string;
+  /** Default memory domain and provenance domain (default "general") */
+  domain?: string;
 }

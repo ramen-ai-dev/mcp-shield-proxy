@@ -194,4 +194,33 @@ describe("parseArgs()", () => {
       parse(["--target", "node s.js", "--bundle-ids", "b1", "--log-level", "verbose"])
     ).toThrow("process.exit");
   });
+  // ── ramen forge memory flags ─────────────────────────────────────────────
+  it("defaults --forge-url and --domain", () => {
+    const config = parse(["--target", "node s.js", "--bundle-ids", "b1"]);
+    expect(config.forgeUrl).toBe("https://forge.ramenai.dev");
+    expect(config.domain).toBe("general");
+  });
+
+  it("parses --forge-url and --domain", () => {
+    const config = parse([
+      "--target", "node s.js", "--bundle-ids", "b1",
+      "--forge-url", "https://forge.example.test/", "--domain", "industrial_iot",
+    ]);
+    expect(config.forgeUrl).toBe("https://forge.example.test");
+    expect(config.domain).toBe("industrial_iot");
+    expect(parse(["--target", "node s.js", "--bundle-ids", "b1", "--forge-url", "http://localhost:8787"]).forgeUrl)
+      .toBe("http://localhost:8787");
+  });
+
+  it("rejects an insecure or invalid --forge-url and a bad --domain", () => {
+    for (const extra of [
+      ["--forge-url", "http://forge.example.test"],
+      ["--forge-url", "not a url"],
+      ["--forge-url"],
+      ["--domain", "Fin Tech"],
+      ["--domain"],
+    ]) {
+      expect(() => parse(["--target", "node s.js", "--bundle-ids", "b1", ...extra])).toThrow("process.exit");
+    }
+  });
 });

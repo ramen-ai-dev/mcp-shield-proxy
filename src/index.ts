@@ -7,11 +7,12 @@
  * Semantic Firewall, and blocks malicious payloads pre-execution by returning
  * an MCP-compliant isError tool result.
  *
- * All non-tools/call traffic is forwarded unchanged, making this a transparent
- * proxy for every other MCP message type (initialize, tools/list, resources,
- * prompts, notifications, etc.).
+ * All other traffic is forwarded unchanged, with two additions: the proxy
+ * advertises its own read-only `query_domain_memory` tool in tools/list, and
+ * attaches a provenance envelope to the `_meta` of governed tool results.
  */
 
+import { RemoteForgeMemoryStore } from "@ramen-ai/node-core";
 import { parseArgs } from "./cli.js";
 import { buildClient } from "./firewall.js";
 import { runProxy } from "./proxy.js";
@@ -19,5 +20,16 @@ import { runProxy } from "./proxy.js";
 const config = parseArgs(process.argv);
 const client = buildClient(config);
 
-const { exitCode } = await runProxy(config, client);
+// Read-only: the proxy never contributes to ramen forge. Warnings go to stderr
+// so they never corrupt the stdio JSON-RPC stream on stdout.
+const memoryStore = new RemoteForgeMemoryStore({
+  baseUrl: config.forgeUrl,
+  domain: config.domain,
+  logger: {
+    warn: (message) => process.stderr.write(`[ramen-proxy:memory] ${message}\n`),
+    info: () => {},
+  },
+});
+
+const { exitCode } = await runProxy(config, client, { memoryStore });
 process.exit(exitCode);
