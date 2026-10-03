@@ -129,8 +129,10 @@ Claude Desktop / MCP client
 │                                             │
 │  tools/call?                                │
 │    → evaluate: {tool, arguments}            │
-│      ALLOWED  → forward to child stdin      │
-│      BLOCKED  → synthesise isError response │
+│      ALLOWED + verified receipt             │
+│               → forward to child stdin      │
+│      BLOCKED or unverified                  │
+│               → synthesise isError response │
 │                 back to client stdout       │
 │                                             │
 │  anything else → forward unchanged          │
@@ -153,6 +155,24 @@ transparent to the MCP client.
 **Fail-closed:** if the ramen-ai API is unreachable or returns an error, the
 tool call is blocked and an `isError: true` response is returned. An
 unavailable firewall never becomes an open door.
+
+**Verified ALLOW only:** an `allowed: true` verdict is not enough to reach the
+downstream server. Matching ramen-foundry's `RamenToolNode`, the proxy forwards
+a call only when all of these hold:
+
+1. A Schema V5 receipt is present.
+2. `@ramen-ai/node-core` verified it against the exact evaluated input
+   (Ed25519 signature under the pinned `ramen_pk_v1` key, and the
+   `payload_hash` binding).
+3. The *signed* payload records `verdict: 1` (ALLOW), with matching `kid` and
+   `id`.
+
+The third check closes a gap in the second: a genuine, validly signed BLOCK
+receipt for the same input, returned with `allowed` flipped to `true`, passes
+the input binding but not the signed verdict. Any failure blocks the call with
+`isError: true` and a steering message saying the verdict could not be
+cryptographically verified. A server-side signing outage (`receipt_alert`)
+therefore blocks allowed calls rather than releasing them unsigned.
 
 ---
 

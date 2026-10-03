@@ -7,10 +7,13 @@
  *   - Fail-closed: transport error → { allowed: false, error }
  *   - buildClient: returns a RamenClient instance
  *   - Payload shape: tool name + arguments in evaluated input JSON
+ *   - Receipt gate: an ALLOW is released only with a verified, signed ALLOW receipt
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ProxyConfig } from "../src/types.js";
+import { RECEIPT_ID, TEST_PUBLIC_KEYS, signedReceipt } from "./fixtures/receipts.js";
+import type { TestReceipt } from "./fixtures/receipts.js";
 
 // ---------------------------------------------------------------------------
 // Shared fixtures
@@ -30,16 +33,24 @@ const TOOL_PARAMS = {
   arguments: { table_name: "users_prod" },
 };
 
-function makeVerdict(allowed: boolean, steering: string | null = null) {
+const SIGNED_ALLOW = await signedReceipt({ verdict: 1 });
+
+function makeVerdict(
+  allowed: boolean,
+  steering: string | null = null,
+  evidence: { receipt?: TestReceipt; receiptVerified?: boolean; receiptReason?: string; receiptAlert?: string } = {},
+) {
+  // Allowed fixtures default to a genuine signed ALLOW receipt the SDK verified.
+  const receipt = "receipt" in evidence ? evidence.receipt : allowed ? SIGNED_ALLOW : undefined;
   return {
     allowed,
     steering,
     policyIds: ["abc123"],
     statutoryAnchors: allowed ? [] : ["OWASP ASI-06"],
-    receipt: undefined,
-    receiptVerified: false,
-    receiptReason: undefined,
-    receiptAlert: undefined,
+    receipt,
+    receiptVerified: evidence.receiptVerified ?? (allowed && receipt !== undefined),
+    receiptReason: evidence.receiptReason,
+    receiptAlert: evidence.receiptAlert,
     data: {
       allowed,
       policy_ids: ["abc123"],
@@ -81,10 +92,12 @@ describe("evaluate()", () => {
     };
 
     const { evaluate } = await import("../src/firewall.js");
-    const result = await evaluate(TOOL_PARAMS, BASE_CONFIG, mockClient as never);
+    const result = await evaluate(TOOL_PARAMS, BASE_CONFIG, mockClient as never, TEST_PUBLIC_KEYS);
 
     expect(result.allowed).toBe(true);
     expect(result.error).toBeUndefined();
+    expect(result.receiptVerified).toBe(true);
+    expect(result.receiptId).toBe(RECEIPT_ID);
   });
 
   it("returns allowed:false with steering on BLOCKED verdict", async () => {
@@ -170,6 +183,71 @@ describe("evaluate()", () => {
     expect((opts as { policyIds: string[] }).policyIds).toEqual([
       "6c787849-96db-4c92-8df9-10aa8d035527",
     ]);
+  });
+});
+
+describe("evaluate() receipt gate", () => {
+  async function evaluateWith(verdict: ReturnType<typeof makeVerdict>) {
+    const mockClient = { evaluateCompliance: vi.fn().mockResolvedValue(verdict) };
+    const { evaluate } = await import("../src/firewall.js");
+    return evaluate(TOOL_PARAMS, BASE_CONFIG, mockClient as never, TEST_PUBLIC_KEYS);
+  }
+
+  function expectFailClosed(result: Awaited<ReturnType<typeof evaluateWith>>, reason: RegExp) {
+    expect(result.allowed).toBe(false);
+    expect(result.receiptVerified).toBe(false);
+    expect(result.error).toMatch(/receipt verification failed/);
+    expect(result.error).toMatch(reason);
+    expect(result.steering).toContain("fail-closed");
+  }
+
+  it("blocks an ALLOW with no receipt", async () => {
+    expectFailClosed(await evaluateWith(makeVerdict(true, null, { receipt: undefined })), /no Schema V5 receipt/);
+  });
+
+  it("reports the server's receipt alert when signing was unavailable", async () => {
+    const result = await evaluateWith(
+      makeVerdict(true, null, { receipt: undefined, receiptAlert: "signing infrastructure unavailable" }),
+    );
+    expectFailClosed(result, /signing infrastructure unavailable/);
+  });
+
+  it("blocks an ALLOW whose receipt the SDK could not verify", async () => {
+    const result = await evaluateWith(
+      makeVerdict(true, null, { receiptVerified: false, receiptReason: "Signature does not verify" }),
+    );
+    expectFailClosed(result, /Signature does not verify/);
+  });
+
+  it("blocks an ALLOW that replays a genuine signed BLOCK receipt", async () => {
+    // The SDK's receiptVerified does not read the signed verdict, so this
+    // forgery passes it; the proxy's signed-verdict check must catch it.
+    const block = await signedReceipt({ verdict: 0 });
+    const result = await evaluateWith(makeVerdict(true, null, { receipt: block, receiptVerified: true }));
+    expectFailClosed(result, /Signed verdict is not 1/);
+    expect(result.receiptId).toBe(RECEIPT_ID);
+  });
+
+  it("blocks an ALLOW whose canonical payload was altered after signing", async () => {
+    const tampered = await signedReceipt({ tamper: true });
+    expectFailClosed(
+      await evaluateWith(makeVerdict(true, null, { receipt: tampered, receiptVerified: true })),
+      /Signature does not verify/,
+    );
+  });
+
+  it("blocks an ALLOW signed by a key other than the pinned one", async () => {
+    // The default production keys cannot verify a receipt signed with the test key.
+    const mockClient = { evaluateCompliance: vi.fn().mockResolvedValue(makeVerdict(true)) };
+    const { evaluate } = await import("../src/firewall.js");
+    expectFailClosed(await evaluate(TOOL_PARAMS, BASE_CONFIG, mockClient as never), /Signature does not verify/);
+  });
+
+  it("leaves a BLOCK verdict as a block without requiring a receipt", async () => {
+    const result = await evaluateWith(makeVerdict(false, "Refuse."));
+    expect(result.allowed).toBe(false);
+    expect(result.error).toBeUndefined();
+    expect(result.steering).toBe("Refuse.");
   });
 });
 

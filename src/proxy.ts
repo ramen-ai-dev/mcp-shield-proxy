@@ -13,7 +13,7 @@
  *   [mcp-shield-proxy]  ← this module
  *     │  tools/call query_domain_memory → answered by the proxy (ramen forge read)
  *     │  tools/call?  → evaluate against ramen-ai
- *     │  ALLOWED      → forward to child stdin
+ *     │  ALLOWED + verified signed receipt → forward to child stdin
  *     │  BLOCKED      → synthesise error response to client stdout
  *     │  anything else→ forward unchanged
  *     ▼
@@ -167,6 +167,8 @@ export async function runProxy(
     stdout?: NodeJS.WritableStream;
     stderr?: NodeJS.WritableStream;
     memoryStore?: RemoteForgeMemoryStore;
+    /** Receipt verification keys (tests only); defaults to the production keys */
+    publicKeys?: Record<string, string>;
   },
 ): Promise<ProxyRunResult> {
   const stdin = options?.stdin ?? process.stdin;
@@ -306,7 +308,7 @@ export async function runProxy(
         }
 
         log.info(`Intercepting tools/call: ${params.name}`);
-        const verdict = await evaluate(params, config, client);
+        const verdict = await evaluate(params, config, client, options?.publicKeys);
         const provenance = evaluationProvenance(domain, params.name, verdict.receiptId);
 
         if (verdict.allowed) {

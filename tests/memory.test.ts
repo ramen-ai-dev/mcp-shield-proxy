@@ -12,10 +12,10 @@ import { fileURLToPath } from "node:url";
 import { RemoteForgeMemoryStore } from "@ramen-ai/node-core";
 import type { ProxyConfig } from "../src/types.js";
 import { parseMemoryArguments, MEMORY_TOOL_DEFINITION, PROVENANCE_META_KEY } from "../src/memory-tool.js";
+import { RECEIPT_ID, TEST_PUBLIC_KEYS, signedReceipt } from "./fixtures/receipts.js";
 
 const SERVER = fileURLToPath(new URL("./fixtures/fake-mcp-server.mjs", import.meta.url));
 const FORGE = "https://forge.example.test";
-const RECEIPT_ID = "8d1f2c4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
 const FINGERPRINT = "594ec7f65c65f2d0a009e193ed80f22f8cdcab5fcad16bf9360f515c7d43f9c2";
 
 function config(overrides: Partial<ProxyConfig> = {}): ProxyConfig {
@@ -64,13 +64,13 @@ function forgeStore(exemplars: unknown[] = [EXEMPLAR], seen: URL[] = []) {
   });
 }
 
-function verdict(allowed: boolean) {
+async function verdict(allowed: boolean) {
   return {
     allowed,
     steering: allowed ? null : "Refuse.",
     policyIds: [],
     statutoryAnchors: allowed ? [] : ["OWASP ASI-06"],
-    receipt: { id: RECEIPT_ID, schema_version: "5.0", kid: "ramen_pk_v1", signature: "s", canonical_payload: "{}" },
+    receipt: await signedReceipt({ verdict: allowed ? 1 : 0 }),
     receiptVerified: true,
     data: {} as never,
   };
@@ -81,13 +81,18 @@ async function run(
   opts: { allowed?: boolean; store?: RemoteForgeMemoryStore; config?: Partial<ProxyConfig> } = {},
 ) {
   const { runProxy } = await import("../src/proxy.js");
-  const client = { evaluateCompliance: vi.fn().mockResolvedValue(verdict(opts.allowed ?? true)) };
+  const client = { evaluateCompliance: vi.fn().mockResolvedValue(await verdict(opts.allowed ?? true)) };
   const stdin = new PassThrough();
   const stdout = new PassThrough();
   const chunks: string[] = [];
   stdout.on("data", (c: Buffer) => chunks.push(c.toString("utf8")));
 
-  const done = runProxy(config(opts.config), client as never, { stdin, stdout, memoryStore: opts.store ?? forgeStore() });
+  const done = runProxy(config(opts.config), client as never, {
+    stdin,
+    stdout,
+    memoryStore: opts.store ?? forgeStore(),
+    publicKeys: TEST_PUBLIC_KEYS,
+  });
   // Like a real MCP client, wait for each response before sending the next request.
   for (const line of lines as { id?: unknown }[]) {
     stdin.write(JSON.stringify(line) + "\n");

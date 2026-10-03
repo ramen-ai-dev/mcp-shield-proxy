@@ -203,6 +203,25 @@ describe("runProxy() message routing", () => {
     expect(stdoutLines.length).toBe(0);
   });
 
+  it("allowed:true without a verified receipt is blocked, not forwarded", async () => {
+    const line = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 77,
+      method: "tools/call",
+      params: { name: "delete_files", arguments: { path: "/" } },
+    });
+
+    // makeVerdict(true) claims ALLOW but carries no receipt (receiptVerified: false).
+    const { stdoutLines } = await runWith([line], async () => makeVerdict(true) as never);
+
+    expect(stdoutLines.length).toBe(1);
+    const response = JSON.parse(stdoutLines[0]);
+    expect(response.id).toBe(77);
+    expect(response.result.isError).toBe(true);
+    expect(response.result.content[0].text).toContain("[BLOCKED]");
+    expect(response.result.content[0].text).toContain("could not be cryptographically verified");
+  });
+
   it("result has jsonrpc 2.0 field", async () => {
     const line = JSON.stringify({
       jsonrpc: "2.0",
